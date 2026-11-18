@@ -50,4 +50,11 @@ inline std::u16string utf16(std::span<const std::byte> b, std::size_t p, std::si
 }
 Table canonical(const Table&);
 void rank_in_order(Table&);
+enum class TextDialect { tabular, multicandidate };
+struct TextParseResult {
+    Table entries;
+    TextDialect dialect=TextDialect::tabular;
+    std::size_t excluded_dynamic_rows=0;
+};
+TextParseResult parse_text(std::span<const std::byte>);
 }

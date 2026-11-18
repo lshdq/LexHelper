@@ -1,10 +1,10 @@
 // CORE-002 / TC-002..006：只经公共 import_file 导入磁盘合成文件。
 // 与开发探针独立的正式矩阵；沿用轻量 runner、ZIP/WBC 合成夹具和安全临时根。
 // 每个 trial 即使导入结果不符合预期，也先检查原输入的全部字节，再报告失败。
-constexpr std::string_view import_text_source="规范化文本（频次越大越靠前；无频次按行序）";
-constexpr std::string_view import_lex_source="微软五笔 lex (1.1，受支持的布局)";
-constexpr std::string_view import_wbc_source="搜狗新世纪 WBC3（索引次序；未知频率字段不保留）";
-constexpr std::string_view import_cwb_source="搜狗 CWB / usr/wbCustom3.bin（索引次序；未知频率字段不保留）";
+constexpr std::string_view import_text_source="规范化文本（频次越大越靠前；无频次按行序）；全表单字优先（同类保持原顺序）";
+constexpr std::string_view import_lex_source="微软五笔 lex (1.1，受支持的布局)；全表单字优先（同类保持原顺序）";
+constexpr std::string_view import_wbc_source="搜狗新世纪 WBC3（索引次序；未知频率字段不保留）；全表单字优先（同类保持原顺序）";
+constexpr std::string_view import_cwb_source="搜狗 CWB / usr/wbCustom3.bin（索引次序；未知频率字段不保留）；全表单字优先（同类保持原顺序）";
 
 struct ImportDetectionCases {
     std::wstring prefix;
@@ -90,9 +90,9 @@ void import_marker_text_tests(){
 void import_binary_detection_tests(){
     ImportDetectionCases cases{L"分流-二进制"};
     // WBC 的物理次序特意不同于索引次序；不能只往返同一个错误的候选顺序。
-    const Table expected{{"a",u"先\U00020000",1},{"a",u"后",2},{"trxy",u"我",1}};
+    const Table expected{{"a",u"后",1},{"a",u"先\U00020000",2},{"trxy",u"我",1}};
     const auto raw=wbc({{"trxy",u"我",0},{"a",u"后",0},{"a",u"先\U00020000",0}},{2,1,0});
-    const auto lex=write_lex(expected);
+    const auto lex=write_lex({{"a",u"先\U00020000",7},{"a",u"后",99},{"trxy",u"我",0}});
     for(const auto ext:{L".lex",L".LEX",L".LeX",L".bin",L".unknown",L""}) {
         cases.trial("valid lex",ext,lex,&expected,import_lex_source);
         // 格式专属错误也必须保留，防止 catch 后用文本错误掩盖真正损坏。

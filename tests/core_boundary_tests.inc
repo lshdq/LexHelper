@@ -120,7 +120,8 @@ void io_boundary_tests(){ // TC-007：只在合成临时路径测试 alias、CRE
     {FixtureHandle locked(CreateFileW(p.c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));CHECK(locked.get()!=INVALID_HANDLE_VALUE);rejects([&]{import_file(p);});rejects([&]{save_lex(p,other);});}CHECK(read_fixture(p)==before);
     // 多种候选争抢同一新路径：只能一个完整文件获胜，不能拼接、覆盖或留下零长成功文件。
     for(unsigned iteration=0;iteration<8;++iteration){const auto race=temp_root/(L"争抢-"+std::to_wstring(iteration)+L".lex");std::barrier start(8);std::atomic<int> success=0;std::vector<std::thread> threads;std::array<Table,8> alternatives;
-        for(unsigned i=0;i<8;++i)alternatives[i]={{std::string(1,static_cast<char>('a'+i)),std::u16string(100+i,static_cast<char16_t>(u'甲'+i)),static_cast<std::uint16_t>(i)}};
+        // 此测试比较保存字节与再次导入值；单独词组的归一化代价为 1。
+        for(unsigned i=0;i<8;++i)alternatives[i]={{std::string(1,static_cast<char>('a'+i)),std::u16string(100+i,static_cast<char16_t>(u'甲'+i)),1}};
         for(unsigned i=0;i<8;++i)threads.emplace_back([&,i]{start.arrive_and_wait();try{save_lex(race,alternatives[i]);++success;}catch(const std::exception&) {}});
         for(auto& thread:threads)thread.join();CHECK(success==1);const auto winner=import_file(race).entries;CHECK(std::count(alternatives.begin(),alternatives.end(),winner)==1);CHECK(read_fixture(race)==write_lex(winner));
     }

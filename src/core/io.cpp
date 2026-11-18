@@ -189,16 +189,58 @@ InputFormat input_format(const std::filesystem::path& path,std::span<const std::
     }
     return InputFormat::text;
 }
+bool single_scalar(std::u16string_view text) {
+    // 各 codec 已完整校验 Unicode；两个 UTF-16 单元仅在合法代理对时才是单字。
+    return text.size()==1 || (text.size()==2 && text[0]>=0xd800 && text[0]<=0xdbff &&
+        text[1]>=0xdc00 && text[1]<=0xdfff);
+}
+void prioritize_characters(Table& t) {
+    // 输入已按编码及各格式先验顺序排列。全表分段同时约束完整编码与前缀候选。
+    std::size_t max_singles=0,max_phrases=0;
+    for(std::size_t first=0;first<t.size();) {
+        auto last=first;std::size_t singles=0;
+        while(last<t.size() && t[last].code==t[first].code) {
+            if(single_scalar(t[last].text))++singles;
+            ++last;
+        }
+        detail::need(last-first<=65535,"同码候选超过 65535，不能无损表示次序");
+        max_singles=std::max(max_singles,singles);
+        max_phrases=std::max(max_phrases,last-first-singles);first=last;
+    }
+    detail::need(max_singles+max_phrases<=65535,"全表单字/词组权重分段超过 65535，不能无损表示次序");
+    for(std::size_t first=0;first<t.size();) {
+        auto last=first;std::size_t singles=0,phrases=0;
+        while(last<t.size() && t[last].code==t[first].code) {
+            auto& e=t[last++];
+            const auto weight=single_scalar(e.text)?++singles:max_singles+(++phrases);
+            e.weight=static_cast<std::uint16_t>(weight);
+        }
+        // 同类权重递增；稳定按新权重排序，不改变同类的格式先验顺序。
+        std::stable_sort(t.begin()+first,t.begin()+last,[](const Entry& a,const Entry& b){return a.weight<b.weight;});
+        first=last;
+    }
+}
 }
 ImportResult import_file(const std::filesystem::path& path) {
     auto b=read_file(path);
+    ImportResult result;
     switch(input_format(path,b)) {
-    case InputFormat::lex:return {read_lex(b),"微软五笔 lex (1.1，受支持的布局)"};
-    case InputFormat::wbc3:return {read_wbc3(b),"搜狗新世纪 WBC3（索引次序；未知频率字段不保留）"};
-    case InputFormat::cwb:return {read_cwb(b),"搜狗 CWB / usr/wbCustom3.bin（索引次序；未知频率字段不保留）"};
-    case InputFormat::text:return {read_text(b),"规范化文本（频次越大越靠前；无频次按行序）"};
+    case InputFormat::lex:result={read_lex(b),"微软五笔 lex (1.1，受支持的布局)"};break;
+    case InputFormat::wbc3:result={read_wbc3(b),"搜狗新世纪 WBC3（索引次序；未知频率字段不保留）"};break;
+    case InputFormat::cwb:result={read_cwb(b),"搜狗 CWB / usr/wbCustom3.bin（索引次序；未知频率字段不保留）"};break;
+    case InputFormat::text: {
+        auto parsed=detail::parse_text(b);result.entries=std::move(parsed.entries);
+        if(parsed.dialect==detail::TextDialect::multicandidate)
+            result.source="孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 "+
+                std::to_string(parsed.excluded_dynamic_rows)+" 行）";
+        else result.source="规范化文本（频次越大越靠前；无频次按行序）";
+        break;
     }
-    detail::fail("未知输入类型");
+    default:detail::fail("未知输入类型");
+    }
+    prioritize_characters(result.entries);
+    result.source+="；全表单字优先（同类保持原顺序）";
+    return result;
 }
 void save_lex(const std::filesystem::path& path,const Table& table) {
     save_impl(path,table,nullptr,nullptr);

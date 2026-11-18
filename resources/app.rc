@@ -2,6 +2,8 @@
 #include <windows.h>
 #include "resource.h"
 
+IDI_LEXHELPER ICON "app.ico"
+
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
 
 1 VERSIONINFO

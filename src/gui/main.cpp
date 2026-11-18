@@ -120,6 +120,40 @@ struct UniqueAccelerator {
     UniqueAccelerator& operator=(const UniqueAccelerator&) = delete;
 };
 
+struct UniqueIcon {
+    HICON value{};
+    explicit UniqueIcon(HICON icon = nullptr) noexcept : value(icon) {}
+    ~UniqueIcon() { if (value) DestroyIcon(value); }
+    UniqueIcon(const UniqueIcon&) = delete;
+    UniqueIcon& operator=(const UniqueIcon&) = delete;
+    UniqueIcon(UniqueIcon&& other) noexcept : value(std::exchange(other.value, nullptr)) {}
+    UniqueIcon& operator=(UniqueIcon&& other) noexcept {
+        if (this != &other) {
+            if (value) DestroyIcon(value);
+            value = std::exchange(other.value, nullptr);
+        }
+        return *this;
+    }
+};
+
+struct ApplicationIcons {
+    UniqueIcon large_icon;
+    UniqueIcon small_icon;
+};
+
+ApplicationIcons load_application_icons(HINSTANCE instance, UINT dpi) {
+    const auto load = [instance, dpi](int width_metric, int height_metric) {
+        const int width = GetSystemMetricsForDpi(width_metric, dpi);
+        const int height = GetSystemMetricsForDpi(height_metric, dpi);
+        if (width <= 0 || height <= 0) throw std::runtime_error("Invalid system icon dimensions");
+        // No LR_SHARED: each size has a distinct owner and is released with DestroyIcon.
+        HICON icon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_LEXHELPER), IMAGE_ICON, width, height, 0));
+        if (!icon) win_error("LoadImageW(LexHelper icon)");
+        return UniqueIcon(icon);
+    };
+    return {load(SM_CXICON, SM_CYICON), load(SM_CXSMICON, SM_CYSMICON)};
+}
+
 bool elevated() {
     UniqueHandle token;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value)) win_error("OpenProcessToken");
@@ -285,6 +319,9 @@ private:
     HWND window_{};
     HMENU menu_{}; // Borrowed; DestroyWindow destroys the assigned menu.
     HFONT font_{}; // Owned, unlike DEFAULT_GUI_FONT.
+    // The class/window only borrow these; destruction follows DestroyWindow/UnregisterClass.
+    ApplicationIcons class_icons_;
+    ApplicationIcons window_icons_;
     UINT dpi_{96};
     bool administrator_{};
     bool registered_{};
@@ -306,6 +343,7 @@ private:
     void controls();
     void layout();
     void rebuild_font();
+    void rebuild_icons();
     HMENU create_menu();
     HWND control(int id) const { return GetDlgItem(window_, id); }
     int scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
@@ -441,6 +479,15 @@ void Application::rebuild_font() {
     if (HWND header = ListView_GetHeader(control(IDC_PREVIEW))) SendMessageW(header, WM_SETFONT, reinterpret_cast<WPARAM>(selected), TRUE);
     const HFONT old = std::exchange(font_, replacement);
     if (old) DeleteObject(old);
+}
+
+void Application::rebuild_icons() {
+    // Load both before changing either borrowed handle; failure leaves the old pair alive.
+    auto replacement = load_application_icons(instance_, dpi_);
+    // WM_SETICON returns a borrowed previous handle, not an error status or ownership transfer.
+    SendMessageW(window_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(replacement.large_icon.value));
+    SendMessageW(window_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(replacement.small_icon.value));
+    window_icons_ = std::move(replacement); // Release the previous pair only after replacement.
 }
 
 void Application::set_status(const std::wstring& message) {
@@ -879,6 +926,7 @@ LRESULT Application::dispatch(UINT message, WPARAM wparam, LPARAM lparam) {
     case WM_CREATE:
         dpi_ = GetDpiForWindow(window_);
         if (!dpi_) dpi_ = 96;
+        rebuild_icons();
         controls();
         if (!SetTimer(window_, completion_timer, 100, nullptr)) win_error("SetTimer");
         layout();
@@ -894,6 +942,7 @@ LRESULT Application::dispatch(UINT message, WPARAM wparam, LPARAM lparam) {
     case WM_DPICHANGED: {
         dpi_ = HIWORD(wparam);
         if (!dpi_) dpi_ = 96;
+        rebuild_icons();
         rebuild_font();
         const auto& suggested = *reinterpret_cast<RECT*>(lparam);
         if (!SetWindowPos(window_, nullptr, suggested.left, suggested.top, suggested.right - suggested.left, suggested.bottom - suggested.top, SWP_NOZORDER | SWP_NOACTIVATE)) win_error("SetWindowPos(DPI)");
@@ -902,6 +951,7 @@ LRESULT Application::dispatch(UINT message, WPARAM wparam, LPARAM lparam) {
     }
     case WM_SETTINGCHANGE:
     case WM_THEMECHANGED:
+        rebuild_icons();
         rebuild_font();
         InvalidateRect(window_, nullptr, TRUE);
         return 0;
@@ -931,21 +981,22 @@ LRESULT Application::dispatch(UINT message, WPARAM wparam, LPARAM lparam) {
 }
 
 int Application::run(int show) {
+    dpi_ = GetDpiForSystem();
+    if (!dpi_) dpi_ = 96;
+    class_icons_ = load_application_icons(instance_, dpi_);
     WNDCLASSEXW descriptor{sizeof(descriptor)};
     descriptor.style = CS_HREDRAW | CS_VREDRAW;
     descriptor.lpfnWndProc = procedure;
     descriptor.hInstance = instance_;
     descriptor.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    descriptor.hIcon = LoadIconW(nullptr, IDI_APPLICATION); // Shared system resources, not owned.
-    descriptor.hIconSm = descriptor.hIcon;
+    descriptor.hIcon = class_icons_.large_icon.value;
+    descriptor.hIconSm = class_icons_.small_icon.value;
     descriptor.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
     descriptor.lpszClassName = window_class;
-    if (!descriptor.hCursor || !descriptor.hIcon) win_error("LoadCursor/LoadIcon");
+    if (!descriptor.hCursor) win_error("LoadCursorW");
     if (!RegisterClassExW(&descriptor)) win_error("RegisterClassExW");
     registered_ = true;
     menu_ = create_menu();
-    dpi_ = GetDpiForSystem();
-    if (!dpi_) dpi_ = 96;
     RECT rectangle{0, 0, scale(1080), scale(760)};
     if (!AdjustWindowRectExForDpi(&rectangle, WS_OVERLAPPEDWINDOW, TRUE, 0, dpi_)) { const DWORD error = GetLastError(); DestroyMenu(menu_); menu_ = nullptr; win_error("AdjustWindowRectExForDpi", error); }
     int width = rectangle.right - rectangle.left;

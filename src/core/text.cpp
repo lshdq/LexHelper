@@ -26,16 +26,39 @@ std::u16string decode(std::span<const std::byte> b) {
 bool is_code(std::u16string_view s) {
     return !s.empty() && s.size()<=4 && std::all_of(s.begin(),s.end(),[](char16_t c){return c>=u'a' && c<=u'z';});
 }
+bool separator(char16_t c) { return c==u' ' || c==u'\t'; }
+std::vector<std::u16string_view> candidates(std::u16string_view line) {
+    detail::need(!separator(line.front()),"编码前不能有空格或 TAB");
+    std::vector<std::u16string_view> fields;
+    for(std::size_t p=0;p<line.size();) {
+        const auto start=p;
+        while(p<line.size() && !separator(line[p]))++p;
+        fields.push_back(line.substr(start,p-start));
+        detail::need(fields.size()<=detail::max_entries+1,"词条数超过上限");
+        while(p<line.size() && separator(line[p]))++p;
+    }
+    detail::need(fields.size()>=2,"多候选数据行必须包含编码和至少一个候选");
+    return fields;
 }
-Table read_text(std::span<const std::byte> b) {
+bool dynamic_time_row(const std::vector<std::u16string_view>& fields) {
+    if(fields.size()!=3)return false;
+    return (fields[0]==u"minute" && fields[1]==u"^$mi分" && fields[2]==u"^$MI分") ||
+        (fields[0]==u"month" && fields[1]==u"^$m月" && fields[2]==u"^$M月") ||
+        (fields[0]==u"second" && fields[1]==u"^$s秒" && fields[2]==u"^$S秒");
+}
+}
+detail::TextParseResult detail::parse_text(std::span<const std::byte> b) {
     using namespace detail;
     need(!b.empty() && b.size()<=max_file,"文本为空或超过 128 MiB");
-    const auto text=decode(b); Table t; std::vector<std::uint64_t> frequencies;
+    const auto text=decode(b); TextParseResult parsed; auto& t=parsed.entries;
+    std::vector<std::uint64_t> frequencies;
     for(std::size_t i=0;i<text.size();++i) {
-        const auto c=text[i];need(c>=32 || c==u'\t' || c==u'\n' || c==u'\r',"文本含 NUL 或非法控制字符");
+        const auto c=text[i];need((c>=32 && c!=127) || c==u'\t' || c==u'\n' || c==u'\r',"文本含 NUL 或非法控制字符");
         if(c>=0xd800 && c<=0xdbff){need(i+1<text.size() && text[i+1]>=0xdc00 && text[i+1]<=0xdfff,"文本含非法 UTF-16 代理对");++i;}
         else need(c<0xdc00 || c>0xdfff,"文本含孤立 UTF-16 代理项");
     }
+    enum class State { undecided, tabular, header, data };
+    State state=State::undecided;
     std::size_t start=0,line_no=0; int orientation=-1,field_count=0;
     while(start<text.size()) {
         ++line_no; auto end=text.find(u'\n',start); if(end==text.npos) end=text.size();
@@ -43,6 +66,32 @@ Table read_text(std::span<const std::byte> b) {
         if(!line.empty() && line.back()==u'\r') line.remove_suffix(1);
         if(line.empty() || line[0]==u'#') continue;
         try {
+            if(state==State::undecided) {
+                // TAB 词条可以字面上以 name= 起始，不能抢占原有合法列格式。
+                if(line.starts_with(u"name=") && line.find(u'\t')==line.npos) {
+                    const auto name=line.substr(5);valid_text(name);
+                    need(name.find_first_not_of(u' ')!=name.npos,"name= 元数据不能为空白");
+                    parsed.dialect=TextDialect::multicandidate;state=State::header;continue;
+                }
+                state=State::tabular;
+            }
+            if(state==State::header) {
+                need(line==u"[data]","name= 后必须是唯一的 [data] 段；不支持其他元数据或段");
+                state=State::data;continue;
+            }
+            if(state==State::data) {
+                const auto fields=candidates(line);
+                if(dynamic_time_row(fields)) {++parsed.excluded_dynamic_rows;continue;}
+                need(is_code(fields[0]),"编码必须为 1-4 个 a-z；仅排除三种已知动态时间项");
+                std::string code;for(const auto c:fields[0])code.push_back(static_cast<char>(c));
+                for(std::size_t i=1;i<fields.size();++i) {
+                    valid_text(fields[i]);
+                    // 普通短编码下的文本仅作字面词条，绝不展开宏或扩大排除范围。
+                    need(t.size()<max_entries,"词条数超过上限");
+                    t.push_back({code,std::u16string(fields[i]),0});
+                }
+                continue;
+            }
             std::vector<std::u16string_view> fields; std::size_t s=0;
             for(;;) {const auto p=line.find(u'\t',s); fields.push_back(line.substr(s,p==line.npos?p:p-s));if(p==line.npos)break;s=p+1;need(fields.size()<3,"字段过多");}
             need(fields.size()==2 || fields.size()==3,"每行必须是两个或三个制表符分隔字段");
@@ -61,10 +110,17 @@ Table read_text(std::span<const std::byte> b) {
             need(t.size()<max_entries,"词条数超过上限");t.push_back(std::move(e));frequencies.push_back(f);
         } catch(const std::exception& e) {throw std::runtime_error("文本第 "+std::to_string(line_no)+" 行："+e.what());}
     }
+    need(state!=State::header,"多候选文本缺少 [data] 段");
     need(!t.empty(),"文本没有词条");
-    std::vector<std::size_t> order(t.size());std::iota(order.begin(),order.end(),0);
-    std::stable_sort(order.begin(),order.end(),[&](auto a,auto z){return t[a].code<t[z].code || (t[a].code==t[z].code && frequencies[a]>frequencies[z]);});
-    Table result;result.reserve(t.size());for(auto i:order)result.push_back(std::move(t[i]));
-    rank_in_order(result);return result;
+    if(parsed.dialect==TextDialect::tabular) {
+        std::vector<std::size_t> order(t.size());std::iota(order.begin(),order.end(),0);
+        std::stable_sort(order.begin(),order.end(),[&](auto a,auto z){return t[a].code<t[z].code || (t[a].code==t[z].code && frequencies[a]>frequencies[z]);});
+        Table ordered;ordered.reserve(t.size());for(auto i:order)ordered.push_back(std::move(t[i]));
+        t=std::move(ordered);
+    }
+    rank_in_order(t);return parsed;
+}
+Table read_text(std::span<const std::byte> b) {
+    return detail::parse_text(b).entries;
 }
 }

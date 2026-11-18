@@ -15,7 +15,9 @@ struct Entry {
 };
 using Table = std::vector<Entry>;
 struct ImportResult { Table entries; std::string source; };
+// 所有文件格式统一全表单字优先，同码同类保持各格式原次序；分段无法用 uint16 表示则拒绝。
 ImportResult import_file(const std::filesystem::path&);
+// 底层 codec 保持原权重/格式先验次序，不应用文件导入的单字优先策略。
 Table read_lex(std::span<const std::byte>);
 std::vector<std::byte> write_lex(const Table&);
 // 相对已验证的父目录对象原子 FILE_CREATE（CREATE_NEW），不覆盖文件、目录、链接或输入。
@@ -24,5 +26,6 @@ void save_lex(const std::filesystem::path&, const Table&);
 // 补充内存接口，供可复用测试和不落盘预览使用；所有输入有大小上限。
 Table read_wbc3(std::span<const std::byte>);
 Table read_cwb(std::span<const std::byte>);
+// 规范 TAB 文本或 name=/[data] 多候选文本；低层返回格式先验排名。
 Table read_text(std::span<const std::byte>);
 }
