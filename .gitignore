@@ -1,0 +1,14 @@
+/out/
+/.vs/
+*.user
+*.suo
+*.CWB
+*.cwb
+*.lex
+/CMakeUserPresets.json
+# 文档及测试代码应入库；私人词库和部署备份永不入库。
+/backups/
+# 仅保留项目指令，其他 OpenCode 本地文件仍忽略。
+!/.opencode/
+/.opencode/*
+!/.opencode/AGENTS.md
