@@ -167,6 +167,8 @@ void io_tests(){
 #include "core_import_detection_tests.inc"
 #include "core_multitext_tests.inc"
 #include "core_multitext_independent_tests.inc"
+#include "core_gb2312_priority_tests.inc"
+#include "core_gb2312_independent_tests.inc"
 void sample_test(){
     wchar_t* env=nullptr;std::size_t length=0;CHECK(_wdupenv_s(&env,&length,L"LEXHELPER_CWB_SAMPLE")==0);
     std::unique_ptr<wchar_t,decltype(&std::free)> owner(env,&std::free);
@@ -191,7 +193,26 @@ int main(){
         CHECK(std::filesystem::is_directory(base));const auto base_attributes=GetFileAttributesW(base.c_str());CHECK(base_attributes!=INVALID_FILE_ATTRIBUTES && !(base_attributes&FILE_ATTRIBUTE_REPARSE_POINT));
         temp_root=base/(L"lexhelper-core-tests-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64()));CHECK(std::filesystem::create_directory(temp_root));
         int failed=0;
-        for(const auto& [name,test]:std::vector<std::pair<const char*,std::function<void()>>>{{"lex",lex_tests},{"text",text_tests},{"wbc/zip",wbc_zip_tests},{"io",io_tests},{"lex-boundaries TC002/003",lex_boundary_tests},{"text-boundaries TC004",text_boundary_tests},{"wbc-boundaries TC005",wbc_boundary_tests},{"candidate-limit TC005",candidate_limit_tests},{"zip-boundaries TC005",zip_boundary_tests},{"input-limits TC003/004/005",input_size_limit_tests},{"io-boundaries TC007",io_boundary_tests},{"io-identity CORE-001/TC007",io_identity_tests},{"io-post-create TC007",io_post_create_tests},{"io-raw-paths TC007",io_raw_path_tests},{"import-marker-text CORE-002/TC004",import_marker_text_tests},{"import-binary TC002/003/005",import_binary_detection_tests},{"import-type-conflicts TC003/004/005",import_type_conflict_tests},{"import-strict-rejections TC003/004/005",import_invalid_text_tests},{"multicandidate text TC001/003/004",multicandidate_text_tests},{"multicandidate rejections TC004",multicandidate_rejection_tests},{"all-format character priority TC002/003/005",import_character_priority_tests},{"priority boundaries TC005",import_priority_boundary_tests},{"independent literal scalars TC001/003/004",independent_literal_scalar_tests},{"independent structure dynamics TC001/004/005",independent_structure_dynamic_tests},{"independent cross-format oracle TC001/002/003/005",independent_cross_format_oracle_tests},{"independent separated weight boundary TC002/005",independent_separated_weight_boundary_tests},{"independent multitext entry limits TC005",independent_multitext_entry_limit_tests},{"sample TC006",sample_test},{"text sample TC006",text_sample_test}}){
+        for(const auto& [name,test]:std::vector<std::pair<const char*,std::function<void()>>>{
+            {"lex",lex_tests},{"text",text_tests},{"wbc/zip",wbc_zip_tests},{"io",io_tests},
+            {"lex-boundaries TC002/003",lex_boundary_tests},{"text-boundaries TC004",text_boundary_tests},
+            {"wbc-boundaries TC005",wbc_boundary_tests},{"candidate-limit TC005",candidate_limit_tests},
+            {"zip-boundaries TC005",zip_boundary_tests},{"input-limits TC003/004/005",input_size_limit_tests},
+            {"io-boundaries TC007",io_boundary_tests},{"io-identity CORE-001/TC007",io_identity_tests},
+            {"io-post-create TC007",io_post_create_tests},{"io-raw-paths TC007",io_raw_path_tests},
+            {"import-marker-text CORE-002/TC004",import_marker_text_tests},{"import-binary TC002/003/005",import_binary_detection_tests},
+            {"import-type-conflicts TC003/004/005",import_type_conflict_tests},{"import-strict-rejections TC003/004/005",import_invalid_text_tests},
+            {"multicandidate text TC001/003/004",multicandidate_text_tests},{"multicandidate rejections TC004",multicandidate_rejection_tests},
+            {"all-format character priority TC002/003/005",import_character_priority_tests},{"priority boundaries TC005",import_priority_boundary_tests},
+            {"independent literal scalars TC001/003/004",independent_literal_scalar_tests},{"independent structure dynamics TC001/004/005",independent_structure_dynamic_tests},
+            {"independent cross-format oracle TC001/002/003/005",independent_cross_format_oracle_tests},
+            {"independent separated weight boundary TC002/005",independent_separated_weight_boundary_tests},
+            {"independent multitext entry limits TC005",independent_multitext_entry_limit_tests},
+            {"GB2312 full BMP membership TC001/004",gb2312_membership_tests},
+            {"GB2312 class combinations TC002/003/004",gb2312_class_combination_tests},
+            {"GB2312 three-class boundary TC005",gb2312_three_class_boundary_tests},
+            {"independent GB2312 missing phrase boundary TC001/002/003/004/005",independent_gb2312_missing_phrase_boundary_tests},
+            {"sample TC006",sample_test},{"text sample TC006",text_sample_test}}){
             try{test();std::cout<<"[pass] "<<name<<"\n";}catch(const std::exception& e){++failed;std::cerr<<"[FAIL] "<<name<<": "<<e.what()<<"\n";}
         }
         if(failed){std::cerr<<failed<<" groups failed; "<<checks<<" checks executed; "<<skipped<<" skipped scenarios; evidence: "<<temp_root<<"\n";return 1;}

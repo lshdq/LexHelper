@@ -2,6 +2,7 @@
 #include <winternl.h>
 #include "internal.hpp"
 #include "io_test.hpp"
+#include "gb2312_hanzi.hpp"
 #include <exception>
 #include <memory>
 
@@ -194,25 +195,32 @@ bool single_scalar(std::u16string_view text) {
     return text.size()==1 || (text.size()==2 && text[0]>=0xd800 && text[0]<=0xdbff &&
         text[1]>=0xdc00 && text[1]<=0xdfff);
 }
+std::size_t priority_class(std::u16string_view text) {
+    if(text.size()==1 && detail::gb2312_hanzi(text[0]))return 0;
+    return single_scalar(text)?2:1;
+}
 void prioritize_characters(Table& t) {
     // 输入已按编码及各格式先验顺序排列。全表分段同时约束完整编码与前缀候选。
-    std::size_t max_singles=0,max_phrases=0;
+    std::array<std::size_t,3> maxima{};
     for(std::size_t first=0;first<t.size();) {
-        auto last=first;std::size_t singles=0;
+        auto last=first;std::array<std::size_t,3> counts{};
         while(last<t.size() && t[last].code==t[first].code) {
-            if(single_scalar(t[last].text))++singles;
+            ++counts[priority_class(t[last].text)];
             ++last;
         }
         detail::need(last-first<=65535,"同码候选超过 65535，不能无损表示次序");
-        max_singles=std::max(max_singles,singles);
-        max_phrases=std::max(max_phrases,last-first-singles);first=last;
+        for(std::size_t i=0;i<maxima.size();++i)maxima[i]=std::max(maxima[i],counts[i]);
+        first=last;
     }
-    detail::need(max_singles+max_phrases<=65535,"全表单字/词组权重分段超过 65535，不能无损表示次序");
+    // 所有计数均受同码 65535 约束；先检查全表三段之和，再修改任何权重。
+    detail::need(maxima[0]+maxima[1]+maxima[2]<=65535,"全表常用单字/词组/其他单字权重分段超过 65535，不能无损表示次序");
+    const std::array<std::size_t,3> offsets{0,maxima[0],maxima[0]+maxima[1]};
     for(std::size_t first=0;first<t.size();) {
-        auto last=first;std::size_t singles=0,phrases=0;
+        auto last=first;std::array<std::size_t,3> counts{};
         while(last<t.size() && t[last].code==t[first].code) {
             auto& e=t[last++];
-            const auto weight=single_scalar(e.text)?++singles:max_singles+(++phrases);
+            const auto category=priority_class(e.text);
+            const auto weight=offsets[category]+(++counts[category]);
             e.weight=static_cast<std::uint16_t>(weight);
         }
         // 同类权重递增；稳定按新权重排序，不改变同类的格式先验顺序。
@@ -239,7 +247,7 @@ ImportResult import_file(const std::filesystem::path& path) {
     default:detail::fail("未知输入类型");
     }
     prioritize_characters(result.entries);
-    result.source+="；全表单字优先（同类保持原顺序）";
+    result.source+="；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
     return result;
 }
 void save_lex(const std::filesystem::path& path,const Table& table) {

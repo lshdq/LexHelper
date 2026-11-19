@@ -15,12 +15,12 @@ void independent_literal_scalar_tests() {
         u"b 同词\na 词先 42 z ^$mi分 ^$MI分 #tail \u00a0 \u3000 \u00e9 e\u0301\n"
         u"caa 词先 颈\na\t\U00010000\t\U0010ffff\t\u0301\t1\t\n"
         u"b 甲\na \ud7ff \ue000 \u2764\ufe0f \U00010000\U00010001";
-    const Table expected{{"a",u"z",1},{"a",u"\u00a0",2},{"a",u"\u3000",3},{"a",u"\u00e9",4},
-        {"a",u"\U00010000",5},{"a",u"\U0010ffff",6},{"a",u"\u0301",7},{"a",u"1",8},
-        {"a",u"\ud7ff",9},{"a",u"\ue000",10},{"a",u"词先",11},{"a",u"42",12},
-        {"a",u"^$mi分",13},{"a",u"^$MI分",14},{"a",u"#tail",15},{"a",u"e\u0301",16},
-        {"a",u"\u2764\ufe0f",17},{"a",u"\U00010000\U00010001",18},
-        {"b",u"甲",1},{"b",u"同词",11},{"caa",u"颈",1},{"caa",u"词先",11}};
+    const Table expected{{"a",u"词先",2},{"a",u"42",3},{"a",u"^$mi分",4},{"a",u"^$MI分",5},
+        {"a",u"#tail",6},{"a",u"e\u0301",7},{"a",u"\u2764\ufe0f",8},{"a",u"\U00010000\U00010001",9},
+        {"a",u"z",10},{"a",u"\u00a0",11},{"a",u"\u3000",12},{"a",u"\u00e9",13},
+        {"a",u"\U00010000",14},{"a",u"\U0010ffff",15},{"a",u"\u0301",16},{"a",u"1",17},
+        {"a",u"\ud7ff",18},{"a",u"\ue000",19},
+        {"b",u"甲",1},{"b",u"同词",2},{"caa",u"颈",1},{"caa",u"词先",2}};
     ImportDetectionCases cases{L"独立-字面标量"};
     for(const auto& content:import_text_encodings(independent_utf8(wide),wide))
         for(const auto ext:{L".txt",L".TSV",L".bin",L""})
@@ -41,7 +41,7 @@ void independent_structure_dynamic_tests() {
         const auto good=std::u16string(u"name=synthetic\n[data]\na 甲\n")+row+u" \t\n";
         for(const auto& content:import_text_encodings(independent_utf8(good),good))
             cases.trial("one exact dynamic row",L".txt",content,&one,
-                "孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 1 行）；全表单字优先（同类保持原顺序）");
+                "孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 1 行）；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）");
         const auto p=row.find(u' '),q=row.find(u' ',p+1);
         auto upper=row;upper[0]=static_cast<char16_t>(upper[0]-u'a'+u'A');
         const std::vector<std::u16string> bad{row+u" extra",row.substr(0,q),row+u"x",u"x"+row,
@@ -60,7 +60,7 @@ void independent_structure_dynamic_tests() {
     // 重复的精确排除行仍按实际行数报告，不能误报为三种类型数或排除候选数。
     std::u16string repeated=u"name=synthetic\n[data]\na 甲\n";
     for(int n=0;n<2;++n)for(const auto& row:rows)repeated+=row+u"\n";
-    const std::string six="孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 6 行）；全表单字优先（同类保持原顺序）";
+    const std::string six="孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 6 行）；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
     for(const auto& content:import_text_encodings(independent_utf8(repeated),repeated))
         cases.trial("count actual excluded rows including repeated exact rows",L".txt",content,&one,six);
     cases.trial("invalid UTF8 in comment cannot be skipped",L".txt",bytes("#\x80\nname=synthetic\n[data]\na 甲"));
@@ -99,23 +99,26 @@ void independent_structure_dynamic_tests() {
 }
 
 void independent_cross_format_oracle_tests() {
-    // 预期来自带已知单字标志的生成模型，不调用 codec/单字分类器/生产排序生成预期。
-    struct Item {std::u16string text;bool single;};
+    // 预期来自带显式三类标志的生成模型，不调用生产分类器/排序生成预期。
+    struct Item {std::u16string text;unsigned category;};
+    constexpr std::u16string_view common_words=u"甲乙丙丁戊己庚辛壬癸亍弁";
     const std::array<std::string,6> codes{"a","ca","cad","cae","d","yyyy"};
     ImportDetectionCases cases{L"独立-跨格式模型"};std::mt19937 rng(0x18c0ffee);
     for(unsigned round=0;round<18;++round) {
-        std::array<std::vector<Item>,6> groups;std::size_t max_singles=0;
+        std::array<std::vector<Item>,6> groups;std::array<unsigned,3> maxima{};
+        const auto mask=1+round%7; // 覆盖全部七种非空类别组合。
         for(unsigned c=0;c<groups.size();++c) {
             const unsigned count=1+rng()%12;
+            std::array<unsigned,3> counts{};
             for(unsigned i=0;i<count;++i) {
-                const bool single=round==0 || (round!=1 && rng()%2==0);
+                unsigned category=rng()%3;while(!(mask&(1u<<category)))category=(category+1)%3;
                 auto word=scalar_text(0x20000+round*128+c*16+i);
-                if(!single)word+=u"词";
-                groups[c].push_back({std::move(word),single});
+                if(category==0)word=common_words.substr(i,1);
+                if(category==1)word+=u"词";
+                groups[c].push_back({std::move(word),category});++counts[category];
             }
             std::shuffle(groups[c].begin(),groups[c].end(),rng);
-            const auto singles=static_cast<std::size_t>(std::count_if(groups[c].begin(),groups[c].end(),[](const Item& item){return item.single;}));
-            max_singles=std::max(max_singles,singles);
+            for(unsigned category=0;category<3;++category)maxima[category]=std::max(maxima[category],counts[category]);
         }
         Table prior,expected;std::u16string tab,reverse_tab,multi=u"name=synthetic\n[data]\n";
         for(unsigned c=0;c<groups.size();++c) {
@@ -128,10 +131,12 @@ void independent_cross_format_oracle_tests() {
                 tab+=code+u"\t"+word+u"\t"+f+u"\n";
                 reverse_tab+=word+u"\t"+code+u"\t"+f+u"\n";
             }
-            unsigned rank=0;
-            for(const auto& item:groups[c])if(item.single)expected.push_back({codes[c],item.text,static_cast<std::uint16_t>(++rank)});
-            rank=static_cast<unsigned>(max_singles);
-            for(const auto& item:groups[c])if(!item.single)expected.push_back({codes[c],item.text,static_cast<std::uint16_t>(++rank)});
+            unsigned offset=0;
+            for(unsigned category=0;category<3;++category) {
+                unsigned rank=offset;
+                for(const auto& item:groups[c])if(item.category==category)expected.push_back({codes[c],item.text,static_cast<std::uint16_t>(++rank)});
+                offset+=maxima[category];
+            }
         }
         // 新方言跨编码交错，同码仍按上下/左右顺序；刻意与按编码物理分组不同。
         for(std::size_t i=0;i<12;i+=2)for(std::size_t c=groups.size();c-->0;)if(i<groups[c].size()) {
@@ -155,22 +160,24 @@ void independent_cross_format_oracle_tests() {
 }
 
 void independent_separated_weight_boundary_tests() {
-    // 最大单字组与最大词组组完全分离，两组各自远低于 65535，仍要全局相加。
+    // 三类极值分别出现在 a/b/c，三组各自合法，C+P+R 仍要全局相加。
     Table prior,expected;prior.reserve(65536);expected.reserve(65535);
-    for(unsigned i=0;i<32768;++i){auto word=scalar_text(0x10000+i);prior.push_back({"a",word,0});expected.push_back({"a",word,static_cast<std::uint16_t>(i+1)});}
-    for(unsigned i=0;i<32767;++i){auto word=std::u16string(u"词")+scalar_text(0x20000+i);prior.push_back({"b",word,0});expected.push_back({"b",word,static_cast<std::uint16_t>(32769+i)});}
-    CHECK(expected.back().weight==65535);ImportDetectionCases cases{L"独立-分离分段"};
-    cases.trial("global S+P exact 65535 with maxima on different codes",L".lex",write_lex(prior),&expected,import_lex_source);
-    cases.trial("WBC3 global S+P exact boundary",L".wbc3",wbc(prior),&expected,import_wbc_source);
-    prior.push_back({"b",std::u16string(u"词")+scalar_text(0x20000+32767),0});
+    for(unsigned i=0;i<32768;++i){auto word=scalar_text(0x10000+i);prior.push_back({"a",word,0});expected.push_back({"a",word,static_cast<std::uint16_t>(32768+i)});}
+    CHECK(expected.back().weight==65535);
+    for(unsigned i=0;i<32766;++i){auto word=std::u16string(u"词")+scalar_text(0x20000+i);prior.push_back({"b",word,0});expected.push_back({"b",word,static_cast<std::uint16_t>(2+i)});}
+    prior.push_back({"c",u"亍",0});expected.push_back({"c",u"亍",1});
+    ImportDetectionCases cases{L"独立-分离分段"};
+    cases.trial("global C+P+R exact 65535 with three separate maxima",L".lex",write_lex(prior),&expected,import_lex_source);
+    cases.trial("WBC3 global C+P+R exact boundary",L".wbc3",wbc(prior),&expected,import_wbc_source);
+    prior.insert(prior.end()-1,{"b",std::u16string(u"词")+scalar_text(0x20000+32766),0});
     const auto raw=wbc(prior);
     CHECK(read_lex(write_lex(prior))==prior); // 合法底层文件不得被低层策略重写或错误拒绝。
-    cases.trial("lex valid codec but import S+P 65536 must reject",L".lex",write_lex(prior),nullptr,{},"全表单字/词组权重分段");
-    cases.trial("WBC3 cross-group overflow must reject",L".wbc3",raw,nullptr,{},"全表单字/词组权重分段");
-    cases.trial("CWB cross-group overflow must reject",L".cwb",zip({{"usr/wbCustom3.bin",raw,8}}),nullptr,{},"全表单字/词组权重分段");
+    cases.trial("lex valid codec but import C+P+R 65536 must reject",L".lex",write_lex(prior),nullptr,{},"全表常用单字/词组/其他单字权重分段");
+    cases.trial("WBC3 cross-group overflow must reject",L".wbc3",raw,nullptr,{},"全表常用单字/词组/其他单字权重分段");
+    cases.trial("CWB cross-group overflow must reject",L".cwb",zip({{"usr/wbCustom3.bin",raw,8}}),nullptr,{},"全表常用单字/词组/其他单字权重分段");
     std::u16string text=u"name=synthetic\n[data]\n";
     for(const auto& e:prior)text+=std::u16string(e.code.begin(),e.code.end())+u" "+e.text+u"\n";
-    cases.trial("multi individually legal groups but global overflow",L".txt",utf16bom(text),nullptr,{},"全表单字/词组权重分段");
+    cases.trial("multi individually legal groups but global overflow",L".txt",utf16bom(text),nullptr,{},"全表常用单字/词组/其他单字权重分段");
     cases.finish("independent-separated-weight-boundary TC002/005");
 }
 

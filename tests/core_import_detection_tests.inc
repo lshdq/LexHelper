@@ -1,10 +1,10 @@
 // CORE-002 / TC-002..006：只经公共 import_file 导入磁盘合成文件。
 // 与开发探针独立的正式矩阵；沿用轻量 runner、ZIP/WBC 合成夹具和安全临时根。
 // 每个 trial 即使导入结果不符合预期，也先检查原输入的全部字节，再报告失败。
-constexpr std::string_view import_text_source="规范化文本（频次越大越靠前；无频次按行序）；全表单字优先（同类保持原顺序）";
-constexpr std::string_view import_lex_source="微软五笔 lex (1.1，受支持的布局)；全表单字优先（同类保持原顺序）";
-constexpr std::string_view import_wbc_source="搜狗新世纪 WBC3（索引次序；未知频率字段不保留）；全表单字优先（同类保持原顺序）";
-constexpr std::string_view import_cwb_source="搜狗 CWB / usr/wbCustom3.bin（索引次序；未知频率字段不保留）；全表单字优先（同类保持原顺序）";
+constexpr std::string_view import_text_source="规范化文本（频次越大越靠前；无频次按行序）；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
+constexpr std::string_view import_lex_source="微软五笔 lex (1.1，受支持的布局)；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
+constexpr std::string_view import_wbc_source="搜狗新世纪 WBC3（索引次序；未知频率字段不保留）；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
+constexpr std::string_view import_cwb_source="搜狗 CWB / usr/wbCustom3.bin（索引次序；未知频率字段不保留）；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
 
 struct ImportDetectionCases {
     std::wstring prefix;

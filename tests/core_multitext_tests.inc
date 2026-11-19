@@ -1,24 +1,43 @@
-// 多候选文本与全格式单字优先：合成样本，不读取或安装系统词库。
-constexpr std::string_view multi_source_zero="孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 0 行）；全表单字优先（同类保持原顺序）";
-constexpr std::string_view multi_source_three="孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 3 行）；全表单字优先（同类保持原顺序）";
+// 多候选文本与全格式三段优先：合成样本，不读取或安装系统词库。
+constexpr std::string_view multi_source_zero="孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 0 行）；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
+constexpr std::string_view multi_source_three="孤狐多候选文本（同行从左到右，跨行从上到下；已排除动态时间项 3 行）；全表 GB2312 常用单字→词组→其他单字（同类保持原顺序）";
+
+const std::array<bool,65536>& oracle_gb2312_members() {
+    // 独立区位映射 oracle；不读取生产位图，不以 CP936 可编码性判断成员。
+    static const auto members=[] {
+        std::array<bool,65536> flags{};unsigned first_level=0,second_level=0;
+        for(unsigned zone=16;zone<=87;++zone)for(unsigned position=1;position<=(zone==55?89u:94u);++position) {
+            const char pair[]{static_cast<char>(zone+0xa0),static_cast<char>(position+0xa0)};
+            wchar_t scalar{};
+            CHECK(MultiByteToWideChar(936,MB_ERR_INVALID_CHARS,pair,2,&scalar,1)==1);
+            CHECK(scalar>=0x4e00 && scalar<=0x9fff && !flags[scalar]);flags[scalar]=true;
+            if(zone<=55)++first_level;else ++second_level;
+        }
+        CHECK(first_level==3755 && second_level==3008);
+        CHECK(flags[u'啊'] && flags[u'座'] && flags[u'亍'] && flags[u'齄']);
+        CHECK(!flags[u'丂'] && !flags[u'Ａ'] && !flags[u'。']);return flags;
+    }();
+    return members;
+}
 
 void check_global_priority(const Table& t) {
-    // 独立按 Unicode 标量计数，而不是以 UTF-16 长度区分。
-    unsigned max_single=0,min_phrase=65536;
+    const auto& common=oracle_gb2312_members();
+    std::array<unsigned,3> maximum{},minimum{65536,65536,65536};
     for(const auto& e:t) {
         std::size_t scalars=0;
         for(auto c:e.text)if(c<0xdc00 || c>0xdfff)++scalars;
-        if(scalars==1)max_single=std::max(max_single,static_cast<unsigned>(e.weight));
-        else min_phrase=std::min(min_phrase,static_cast<unsigned>(e.weight));
+        const auto category=scalars!=1?1u:(e.text.size()==1 && common[e.text[0]]?0u:2u);
+        maximum[category]=std::max(maximum[category],static_cast<unsigned>(e.weight));
+        minimum[category]=std::min(minimum[category],static_cast<unsigned>(e.weight));
     }
-    CHECK(max_single<min_phrase);
+    for(unsigned a=0;a<3;++a)for(unsigned b=a+1;b<3;++b)CHECK(maximum[a]<minimum[b]);
 }
 
 void multicandidate_text_tests() {
     const std::string text="# synthetic\r\nname=合成表\r\n# header\r\n[data]\r\nca 词先 戏\nca\t词后  \xf0\xa0\x80\x80\t\n# data\nca 弁 e\xcc\x81\ncad 颈\ncae 劲\ncaf 另组";
     const std::u16string wide=u"# synthetic\r\nname=合成表\r\n# header\r\n[data]\r\nca 词先 戏\nca\t词后  \U00020000\t\n# data\nca 弁 e\u0301\ncad 颈\ncae 劲\ncaf 另组";
     const Table low_level{{"ca",u"词先",1},{"ca",u"戏",2},{"ca",u"词后",3},{"ca",u"\U00020000",4},{"ca",u"弁",5},{"ca",u"e\u0301",6},{"cad",u"颈",1},{"cae",u"劲",1},{"caf",u"另组",1}};
-    const Table expected{{"ca",u"戏",1},{"ca",u"\U00020000",2},{"ca",u"弁",3},{"ca",u"词先",4},{"ca",u"词后",5},{"ca",u"e\u0301",6},{"cad",u"颈",1},{"cae",u"劲",1},{"caf",u"另组",4}};
+    const Table expected{{"ca",u"戏",1},{"ca",u"弁",2},{"ca",u"词先",3},{"ca",u"词后",4},{"ca",u"e\u0301",5},{"ca",u"\U00020000",6},{"cad",u"颈",1},{"cae",u"劲",1},{"caf",u"另组",3}};
     ImportDetectionCases cases{L"多候选-编码"};
     for(const auto& encoded:import_text_encodings(text,wide)) {
         CHECK(read_text(encoded)==low_level); // 公开底层接口仍忠实保持原次序。
@@ -71,7 +90,7 @@ void multicandidate_rejection_tests() {
 
 void import_character_priority_tests() {
     ImportDetectionCases cases{L"单字优先-格式"};
-    const Table expected{{"ca",u"戏",1},{"ca",u"\U00020000",2},{"ca",u"弁",3},{"ca",u"词先",4},{"ca",u"词后",5},{"ca",u"e\u0301",6},{"cad",u"颈",1},{"cae",u"劲",1},{"caf",u"另组",4}};
+    const Table expected{{"ca",u"戏",1},{"ca",u"弁",2},{"ca",u"词先",3},{"ca",u"词后",4},{"ca",u"e\u0301",5},{"ca",u"\U00020000",6},{"cad",u"颈",1},{"cae",u"劲",1},{"caf",u"另组",3}};
     const Table prior{{"ca",u"词先",7},{"ca",u"戏",12},{"ca",u"词后",12},{"ca",u"\U00020000",19},{"ca",u"弁",88},{"ca",u"e\u0301",99},{"cad",u"颈",65535},{"cae",u"劲",0},{"caf",u"另组",0}};
     const auto lex=write_lex(prior);CHECK(read_lex(lex)==prior);CHECK(write_lex(read_lex(lex))==lex);
     cases.trial("lex original weight order and ties",L".lex",lex,&expected,import_lex_source);
@@ -90,8 +109,8 @@ void import_character_priority_tests() {
     }
     cases.finish("all-format-priority TC002/003/005");check_global_priority(expected);
     // ca 前缀下每个原编码仍存在；较长编码单字的 weight 也小于 ca 词组。
-    CHECK(expected[6].code=="cad" && expected[6].weight<expected[3].weight);
-    CHECK(expected[7].code=="cae" && expected[7].weight<expected[3].weight);
+    CHECK(expected[6].code=="cad" && expected[6].weight<expected[2].weight);
+    CHECK(expected[7].code=="cae" && expected[7].weight<expected[2].weight);
 }
 
 std::u16string scalar_text(unsigned scalar) {
@@ -100,19 +119,20 @@ std::u16string scalar_text(unsigned scalar) {
 }
 void import_priority_boundary_tests() {
     Table input;input.reserve(65536);
-    // 补充平面提供足够多互异单字。65534 单字 + 1 词组精确占满 uint16。
+    // 补充平面提供足够多互异其他单字。1 词组 + 65534 其他单字精确占满 uint16。
     for(unsigned i=0;i<65534;++i)input.push_back({"a",scalar_text(0x10000+i),0});
     input.push_back({"a",u"词组",0});
     const auto valid=temp_root/L"权重分段-有效.lex";write_bytes(valid,write_lex(input));
     const auto result=import_file(valid).entries;CHECK(result.size()==65535);
-    bool all=true;for(std::size_t i=0;i<result.size();++i)all=all && result[i].text==input[i].text && result[i].code==input[i].code && result[i].weight==i+1;
+    bool all=result[0].text==u"词组" && result[0].weight==1;
+    for(std::size_t i=1;i<result.size();++i)all=all && result[i].text==input[i-1].text && result[i].code==input[i-1].code && result[i].weight==i+1;
     CHECK(all);CHECK(read_lex(write_lex(result))==result);check_global_priority(result);
     const auto roundtrip=temp_root/L"权重分段-幂等.lex";save_lex(roundtrip,result);CHECK(import_file(roundtrip).entries==result);
     input.push_back({"b",u"第二组",0}); // 同码均未超限，但全局分段 65534+1 仍然可表示。
-    const auto other=temp_root/L"权重分段-异码.lex";write_bytes(other,write_lex(input));CHECK(import_file(other).entries.back().weight==65535);
+    const auto other=temp_root/L"权重分段-异码.lex";write_bytes(other,write_lex(input));CHECK(import_file(other).entries.back().weight==1);
     input.push_back({"b",u"第三组",0});
     const auto overflow=temp_root/L"权重分段-溢出.lex";write_bytes(overflow,write_lex(input));
-    rejects_with([&]{import_file(overflow);},"全表单字/词组权重分段");
+    rejects_with([&]{import_file(overflow);},"全表常用单字/词组/其他单字权重分段");
     input.pop_back();input.pop_back();input.back()={"a",scalar_text(0x10000+65534),0};
     const auto singles=temp_root/L"单字-65535.lex";write_bytes(singles,write_lex(input));CHECK(import_file(singles).entries.back().weight==65535);
     input.push_back({"a",scalar_text(0x10000+65535),0});
